@@ -1,0 +1,25 @@
+[project]
+name = "plant_db_team"
+version = "0.1.0"
+description = "plant_db_team using crewAI"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "crewai[tools]==1.14.3",
+    "duckdb>=1.5.2",
+]
+
+[project.scripts]
+plant_db_team = "plant_db_team.main:run"
+run_crew = "plant_db_team.main:run"
+train = "plant_db_team.main:train"
+replay = "plant_db_team.main:replay"
+test = "plant_db_team.main:test"
+run_with_trigger = "plant_db_team.main:run_with_trigger"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "crew"

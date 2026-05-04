@@ -1,0 +1,71 @@
+research_task:
+  description: >
+    Research all growing data for every plant in the following list: {plant_list}
+    The list is organized by category: {plant_categories}.
+    Research each plant in hardiness zone {hardiness_zone} (zipcode {zipcode}).
+    For each plant gather:
+    - Sun tolerance and water requirements
+    - Soil nutrient needs (nitrogen, phosphorus, potassium levels as 0-1 floats)
+    - What the plant needs during growth and what the soil needs after harvest
+    - Days to harvest and when to harvest
+    - Weeks before last frost to start indoors and outdoor sow date range
+    - Spacing in inches between plants
+    - Minimum air and ground temperature to plant (in °F)
+    - Expected plant height in inches
+    - At least 3 companion plants (what grows well nearby)
+    - At least 3 antagonist plants (what should not be planted nearby)
+    - Top 3 common pests with name, symptoms, and treatment
+    - Top 3 common diseases with name, symptoms, and treatment
+  expected_output: >
+    A detailed research summary for every plant in the list.
+    Organized by plant name, covering all fields listed above.
+    All temperatures in °F, all distances in inches.
+  agent: plant_researcher
+
+
+format_task:
+  description: >
+    Convert the research summary into a JSON array where each element represents one plant.
+    One JSON object per plant, covering plant_type, plant_variety, companions, antagonists, pests, diseases.
+    Assign each plant the correct category from: {plant_categories}.
+    Use "Common" as variety_name unless a specific variety was researched.
+  expected_output: >
+    A JSON array with one object per plant, all required fields populated for every entry.
+    IMPORTANT: Output ONLY the raw JSON array without any markdown formatting or code block delimiters.
+    The output must be valid JSON that can be directly parsed with json.loads().
+  agent: data_formatter
+  context:
+    - research_task
+  output_file: output/all_plants_formatted.json
+
+
+validate_task:
+  description: >
+    Review the JSON array and verify every plant entry has all required fields with valid values.
+    Check: all required fields present, sun_tolerance and water_required use allowed enum values,
+    plant_category matches one of {plant_categories}, soil values are floats 0-1,
+    temperatures are °F (range 20-120), distances are inches (range 1-240),
+    each plant has at least 1 pest, 1 disease, 1 companion, and 1 antagonist.
+    Fix all issues and return the complete corrected array.
+  expected_output: >
+    The complete validated JSON array with all issues corrected.
+    IMPORTANT: Output ONLY the raw JSON array without any markdown formatting or code block delimiters.
+    The output must be valid JSON that can be directly parsed with json.loads().
+  agent: data_validator
+  context:
+    - format_task
+  output_file: output/all_plants_validated.json
+
+
+build_database_task:
+  description: >
+    Use the PlantDatabaseWriter tool to write the entire validated JSON array to plant.duckdb at {db_path}.
+    Create all required tables if they do not exist, then insert all plant records.
+    Skip any plant_type that already exists in the database to avoid duplicates.
+  expected_output: >
+    A confirmation report listing total rows written per table:
+    plant_types, plant_varieties, plant_companions, plant_pests, plant_diseases.
+  agent: database_builder
+  context:
+    - validate_task
+  output_file: output/db_build_report.txt

@@ -1,0 +1,185 @@
+[
+    {
+        "plant_type": {
+            "name": "Borage",
+            "category": "herbs"
+        },
+        "plant_variety": {
+            "variety_name": "Common",
+            "plant_category": "herbs",
+            "sun_tolerance": "partial_shade",
+            "water_required": "medium",
+            "soil_n": 0.7,
+            "soil_p": 0.5,
+            "soil_k": 0.6,
+            "growth_needs": "Borage prefers a slightly acidic to neutral pH soil (6.0-7.0).",
+            "post_harvest_soil_needs": "Acts as a green manure increasing organic matter and improving soil fertility.",
+            "days_to_harvest": 60,
+            "indoor_sow_weeks_before_frost": 6,
+            "outdoor_sow_date_range": "After the danger of frost has passed",
+            "spacing_inches": 15.0,
+            "harvest_timing": "Harvest leaves and flowers as required; best before flowering for leaves.",
+            "temp_min_air_f": 50.0,
+            "temp_min_ground_f": 60.0,
+            "height_inches_estimate": 36.0
+        },
+        "companions": ["Tomatoes", "Strawberries", "Squash"],
+        "antagonists": ["Beans"],
+        "pests": [
+            {
+                "pest_name": "Aphids",
+                "symptoms": "Stunted growth, curled leaves",
+                "treatment": "Treat with insecticidal soap."
+            },
+            {
+                "pest_name": "Hornworms",
+                "symptoms": "Large holes in leaves",
+                "treatment": "Handpick or use Bacillus thuringiensis (Bt)."
+            },
+            {
+                "pest_name": "Leaf miners",
+                "symptoms": "Irregular tunnels in leaves",
+                "treatment": "Remove affected leaves and monitor."
+            }
+        ],
+        "diseases": [
+            {
+                "disease_name": "Powdery Mildew",
+                "symptoms": "White powdery growth on leaves",
+                "treatment": "Improve air circulation and use fungicide."
+            },
+            {
+                "disease_name": "Root Rot",
+                "symptoms": "Wilting despite adequate watering",
+                "treatment": "Ensure proper drainage."
+            },
+            {
+                "disease_name": "Damping-off",
+                "symptoms": "Seedlings collapse",
+                "treatment": "Use sterilized soil and avoid overwatering."
+            }
+        ]
+    },
+    {
+        "plant_type": {
+            "name": "Hyssop",
+            "category": "herbs"
+        },
+        "plant_variety": {
+            "variety_name": "Common",
+            "plant_category": "herbs",
+            "sun_tolerance": "full_sun",
+            "water_required": "low",
+            "soil_n": 0.5,
+            "soil_p": 0.4,
+            "soil_k": 0.5,
+            "growth_needs": "Prefers well-drained soil with a pH of 6.7-7.3.",
+            "post_harvest_soil_needs": "Can be used to improve soil structure due to its deep roots.",
+            "days_to_harvest": 90,
+            "indoor_sow_weeks_before_frost": 10,
+            "outdoor_sow_date_range": "After last spring frost",
+            "spacing_inches": 12.0,
+            "harvest_timing": "Harvest leaves before flowering for the best flavor.",
+            "temp_min_air_f": 60.0,
+            "temp_min_ground_f": 65.0,
+            "height_inches_estimate": 36.0
+        },
+        "companions": ["Cabbage", "Grapes", "Lavender"],
+        "antagonists": ["Radishes"],
+        "pests": [
+            {
+                "pest_name": "Spider Mites",
+                "symptoms": "Webbing on leaves",
+                "treatment": "Treat with horticultural oil."
+            },
+            {
+                "pest_name": "Slugs",
+                "symptoms": "Large irregular holes",
+                "treatment": "Use slug bait or traps."
+            },
+            {
+                "pest_name": "Mealybugs",
+                "symptoms": "Cottony masses on plants",
+                "treatment": "Treat with neem oil."
+            }
+        ],
+        "diseases": [
+            {
+                "disease_name": "Root Rot",
+                "symptoms": "Wilting, poor growth",
+                "treatment": "Ensure soil has adequate drainage."
+            },
+            {
+                "disease_name": "Fungal Leaf Spot",
+                "symptoms": "Brown spots on leaves",
+                "treatment": "Remove affected leaves, use fungicide."
+            },
+            {
+                "disease_name": "Rust",
+                "symptoms": "Rusty spots on leaves",
+                "treatment": "Remove affected parts, improve air circulation."
+            }
+        ]
+    },
+    {
+        "plant_type": {
+            "name": "Shiso",
+            "category": "herbs"
+        },
+        "plant_variety": {
+            "variety_name": "Common",
+            "plant_category": "herbs",
+            "sun_tolerance": "partial_shade",
+            "water_required": "medium",
+            "soil_n": 0.6,
+            "soil_p": 0.5,
+            "soil_k": 0.4,
+            "growth_needs": "Best in well-drained, fertile soil with a pH of 5.5-7.5.",
+            "post_harvest_soil_needs": "Adds organic matter post-harvest when used as mulch.",
+            "days_to_harvest": 80,
+            "indoor_sow_weeks_before_frost": 8,
+            "outdoor_sow_date_range": "After the danger of frost has passed",
+            "spacing_inches": 12.0,
+            "harvest_timing": "Leaves can be harvested individually once the plant is established.",
+            "temp_min_air_f": 60.0,
+            "temp_min_ground_f": 65.0,
+            "height_inches_estimate": 36.0
+        },
+        "companions": ["Eggplant", "Cucumber", "Basil"],
+        "antagonists": ["Dill", "Fennel"],
+        "pests": [
+            {
+                "pest_name": "Aphids",
+                "symptoms": "Distorted leaves",
+                "treatment": "Spray with insecticidal soap."
+            },
+            {
+                "pest_name": "Beetles",
+                "symptoms": "Holes in leaves",
+                "treatment": "Handpick or use perimeter traps."
+            },
+            {
+                "pest_name": "Cutworms",
+                "symptoms": "Seedling stems cut at ground level",
+                "treatment": "Use collars around plants."
+            }
+        ],
+        "diseases": [
+            {
+                "disease_name": "Powdery Mildew",
+                "symptoms": "White powder on leaves",
+                "treatment": "Use fungicide, improve circulation."
+            },
+            {
+                "disease_name": "Downy Mildew",
+                "symptoms": "Yellowish leaf spots",
+                "treatment": "Remove infected parts, apply fungicide."
+            },
+            {
+                "disease_name": "Bacterial Leaf Spot",
+                "symptoms": "Dark spots on leaves",
+                "treatment": "Copper-based bactericide and remove affected parts."
+            }
+        ]
+    }
+]

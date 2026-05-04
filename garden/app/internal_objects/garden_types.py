@@ -46,7 +46,7 @@ class SnapshotTrigger(str, Enum):
 class PlantStatus(str, Enum):
     PLANNED = "planned"   # intended to plant — has a planned_sow_date, not yet in ground
     ACTIVE = "active"     # in the ground — has a planted_date
-    REMOVED = "removed"   # pulled out — has a removed_date
+    FULLY_HARVESTED = "fully_harvested"  # pulled out — has a removed_date
 
 
 class AppMode(str, Enum):

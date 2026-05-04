@@ -15,10 +15,11 @@ def build_garden_db(conn: duckdb.DuckDBPyConnection) -> None:
             garden_id       VARCHAR PRIMARY KEY,
             name            VARCHAR NOT NULL,
             zipcode         VARCHAR NOT NULL,
-            aerial_image_path VARCHAR,
-            lat             DOUBLE,
-            lon             DOUBLE,
-            created_at      DATE
+            aerial_image_path   VARCHAR,
+            scale_px_per_foot   DOUBLE,
+            lat                 DOUBLE,
+            lon                 DOUBLE,
+            created_at          DATE
         )
     """)
 
@@ -68,6 +69,17 @@ def build_garden_db(conn: duckdb.DuckDBPyConnection) -> None:
     """)
 
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS plot_regions (
+            region_id   VARCHAR PRIMARY KEY,
+            plot_id     VARCHAR NOT NULL,
+            region_type VARCHAR NOT NULL,
+            zone_value  VARCHAR NOT NULL,
+            polygon     JSON NOT NULL,
+            area_sqft   DOUBLE
+        )
+    """)
+
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS garden_snapshots (
             snapshot_id     VARCHAR PRIMARY KEY,
             snapshot_date   DATE NOT NULL,
@@ -101,6 +113,29 @@ def build_weather_db(conn: duckdb.DuckDBPyConnection) -> None:
             zipcode             VARCHAR PRIMARY KEY,
             first_record_date   DATE,
             last_updated_date   DATE
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS weather_forecast (
+            zipcode          VARCHAR NOT NULL,
+            date             DATE NOT NULL,
+            record_type      VARCHAR NOT NULL,
+            temp_min_f       DOUBLE,
+            temp_max_f       DOUBLE,
+            precipitation_in DOUBLE,
+            wind_max_mph     DOUBLE,
+            wind_direction   VARCHAR,
+            fetched_at       TIMESTAMP,
+            PRIMARY KEY (zipcode, date)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS weather_forecast_summary (
+            zipcode      VARCHAR PRIMARY KEY,
+            summary_text VARCHAR,
+            fetched_at   TIMESTAMP
         )
     """)
 

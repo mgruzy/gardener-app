@@ -1,8 +1,9 @@
 """Plants page — zoomed plot view with plant instance placement (single & row sow styles)."""
 
+import asyncio
 import json
 import math
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,6 +14,8 @@ from streamlit_drawable_canvas import st_canvas
 import app.utils.canvas_utils as cu
 from app.db.connections import DatabaseConnections
 import app.internal_objects.garden_types as garden_enum
+import build.soil_amendment.amendment_agent as amendment_agent
+import app.pages.layout_optimizer_page as layout_optimizer
 
 
 # ── Parameters ────────────────────────────────────────────────────────────────
@@ -40,6 +43,14 @@ def _ensure_migrations(db: DatabaseConnections) -> None:
         )
     """)
     db.garden.execute("ALTER TABLE harvest_log ADD COLUMN IF NOT EXISTS quantity INTEGER")
+    db.garden.execute("""
+        CREATE TABLE IF NOT EXISTS soil_amendment_advice (
+            advice_id       VARCHAR PRIMARY KEY,
+            plot_id         VARCHAR NOT NULL,
+            generated_at    TIMESTAMP NOT NULL,
+            advice_text     VARCHAR NOT NULL
+        )
+    """)
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -85,6 +96,7 @@ def _load_instances(db: DatabaseConnections, plot_id: str) -> list[dict]:
                   planned_sow_date, planted_date
            FROM plant_instances
            WHERE plot_id = ?
+             AND status != 'archived'
            ORDER BY planted_date NULLS LAST, planned_sow_date NULLS LAST""",
         [plot_id],
     ).fetchall()
@@ -115,13 +127,29 @@ def _load_variety_by_id(db: DatabaseConnections, variety_id: str) -> dict | None
     if not variety_id:
         return None
     row = db.plant.execute(
-        """SELECT variety_id, variety_name, spacing_inches, height_inches_estimate, sun_tolerance
+        """SELECT variety_id, variety_name, spacing_inches, height_inches_estimate,
+                  sun_tolerance, days_to_harvest
            FROM plant_varieties WHERE variety_id = ?""",
         [variety_id],
     ).fetchone()
     if not row:
         return None
-    return dict(zip(["variety_id", "variety_name", "spacing_inches", "height_inches_estimate", "sun_tolerance"], row))
+    return dict(zip(
+        ["variety_id", "variety_name", "spacing_inches", "height_inches_estimate",
+         "sun_tolerance", "days_to_harvest"],
+        row,
+    ))
+
+
+def _load_days_to_harvest(db: DatabaseConnections, plant_type_id: str) -> int | None:
+    """Return days_to_harvest for a plant type, averaged across varieties if multiple exist."""
+    row = db.plant.execute(
+        """SELECT CAST(AVG(days_to_harvest) AS INTEGER)
+           FROM plant_varieties
+           WHERE plant_type_id = ? AND days_to_harvest IS NOT NULL""",
+        [plant_type_id],
+    ).fetchone()
+    return row[0] if row and row[0] is not None else None
 
 
 def _load_harvest_log(db: DatabaseConnections, instance_id: str) -> list[dict]:
@@ -182,6 +210,32 @@ def _delete_harvest(db: DatabaseConnections, harvest_id: str, instance_id: str) 
     db.garden.execute("DELETE FROM harvest_log WHERE harvest_id = ?", [harvest_id])
     db.garden.commit()
     _sync_harvest_totals(db, instance_id)
+
+
+def _archive_instance(db: DatabaseConnections, instance_id: str) -> None:
+    """Set status to 'archived' — hidden from plot view, retained in DB."""
+    db.garden.execute(
+        "UPDATE plant_instances SET status = 'archived' WHERE instance_id = ?",
+        [instance_id],
+    )
+    db.garden.commit()
+
+
+def _archive_row(db: DatabaseConnections, row_id: str) -> None:
+    """Archive all instances in a row."""
+    db.garden.execute(
+        "UPDATE plant_instances SET status = 'archived' WHERE row_id = ?",
+        [row_id],
+    )
+    db.garden.commit()
+
+
+def _count_archived(db: DatabaseConnections, plot_id: str) -> int:
+    row = db.garden.execute(
+        "SELECT COUNT(*) FROM plant_instances WHERE plot_id = ? AND status = 'archived'",
+        [plot_id],
+    ).fetchone()
+    return row[0] if row else 0
 
 
 def _update_instance_status(db: DatabaseConnections, instance_id: str, new_status: str) -> None:
@@ -255,6 +309,270 @@ def _delete_row(db: DatabaseConnections, row_id: str) -> None:
         db.garden.execute("DELETE FROM harvest_log WHERE instance_id = ?", [iid])
     db.garden.execute("DELETE FROM plant_instances WHERE row_id = ?", [row_id])
     db.garden.commit()
+
+
+def _ensure_amendment_table(db: DatabaseConnections) -> None:
+    db.garden.execute("""
+        CREATE TABLE IF NOT EXISTS soil_amendment_advice (
+            advice_id       VARCHAR PRIMARY KEY,
+            plot_id         VARCHAR NOT NULL,
+            generated_at    TIMESTAMP NOT NULL,
+            advice_text     VARCHAR NOT NULL
+        )
+    """)
+
+
+def _load_latest_advice(db: DatabaseConnections, plot_id: str) -> dict | None:
+    row = db.garden.execute(
+        """SELECT advice_id, generated_at, advice_text
+           FROM soil_amendment_advice
+           WHERE plot_id = ?
+           ORDER BY generated_at DESC LIMIT 1""",
+        [plot_id],
+    ).fetchone()
+    if not row:
+        return None
+    return {"advice_id": row[0], "generated_at": row[1], "advice_text": row[2]}
+
+
+def _save_advice(db: DatabaseConnections, plot_id: str, advice_text: str) -> None:
+    db.garden.execute(
+        """INSERT INTO soil_amendment_advice (advice_id, plot_id, generated_at, advice_text)
+           VALUES (?, ?, ?, ?)""",
+        [str(uuid4()), plot_id, datetime.now(timezone.utc), advice_text],
+    )
+    db.garden.commit()
+
+
+# ── Garden maintenance helpers ────────────────────────────────────────────────
+
+def _take_snapshot(db: DatabaseConnections) -> str:
+    """
+    Serialize current garden state into garden_snapshots.
+    Marks all previous snapshots is_current=FALSE.
+
+    Returns a human-readable result string.
+    """
+    garden_row = db.garden.execute(
+        "SELECT garden_id, name, zipcode FROM garden LIMIT 1"
+    ).fetchone()
+
+    plots = db.garden.execute(
+        "SELECT plot_id, name, area_sqft FROM plots ORDER BY name"
+    ).fetchall()
+
+    instances = db.garden.execute("""
+        SELECT pi.instance_id, pi.plant_type_id, pi.plot_id,
+               pi.status, pi.planted_date, pi.planned_sow_date,
+               pi.harvest_count, pi.harvest_weight_lbs,
+               pl.name AS plot_name
+        FROM plant_instances pi
+        JOIN plots pl ON pl.plot_id = pi.plot_id
+        WHERE pi.status != 'archived'
+        ORDER BY pi.plot_id, pi.plant_type_id
+    """).fetchall()
+
+    type_ids = list({r[1] for r in instances if r[1]})
+    names_map: dict[str, str] = {}
+    if type_ids:
+        placeholders = ",".join("?" * len(type_ids))
+        try:
+            name_rows = db.plant.execute(
+                f"SELECT plant_type_id, name FROM plant_types "
+                f"WHERE plant_type_id IN ({placeholders})",
+                type_ids,
+            ).fetchall()
+            names_map = {r[0]: r[1] for r in name_rows}
+        except Exception:
+            pass
+
+    import json as _json
+    snapshot = {
+        "snapshot_date": str(date.today()),
+        "garden": (
+            {"garden_id": garden_row[0], "name": garden_row[1], "zipcode": garden_row[2]}
+            if garden_row else None
+        ),
+        "plots": [{"plot_id": p[0], "name": p[1], "area_sqft": p[2]} for p in plots],
+        "instances": [
+            {
+                "instance_id": r[0],
+                "plant_type_id": r[1],
+                "plant_name": names_map.get(r[1], r[1] or "unknown"),
+                "plot_id": r[2],
+                "plot_name": r[8],
+                "status": r[3],
+                "planted_date": str(r[4]) if r[4] else None,
+                "planned_sow_date": str(r[5]) if r[5] else None,
+                "harvest_count": r[6],
+                "harvest_weight_lbs": r[7],
+            }
+            for r in instances
+        ],
+    }
+
+    snapshot_id = str(uuid4())
+    db.garden.execute("UPDATE garden_snapshots SET is_current = FALSE")
+    db.garden.execute(
+        """INSERT INTO garden_snapshots
+               (snapshot_id, snapshot_date, triggered_by, snapshot_json, is_current)
+           VALUES (?, ?, 'manual', ?, TRUE)""",
+        [snapshot_id, date.today(), _json.dumps(snapshot)],
+    )
+    db.garden.commit()
+
+    total = db.garden.execute("SELECT COUNT(*) FROM garden_snapshots").fetchone()[0]
+    return (
+        f"Snapshot saved — {len(instances)} plants across {len(plots)} plot(s). "
+        f"{total} total snapshot(s) on record."
+    )
+
+
+def _run_health_check(db: DatabaseConnections) -> list[str]:
+    """
+    Scan garden state for actionable issues.
+
+    Returns a list of human-readable alert strings (empty = all clear).
+    """
+    today = date.today()
+    issues: list[str] = []
+
+    # Overdue for harvest: active plants past their days_to_harvest window
+    try:
+        active_rows = db.garden.execute("""
+            SELECT pi.plant_type_id, pi.planted_date, pl.name
+            FROM plant_instances pi
+            JOIN plots pl ON pl.plot_id = pi.plot_id
+            WHERE pi.status = 'active' AND pi.planted_date IS NOT NULL
+        """).fetchall()
+
+        type_ids = list({r[0] for r in active_rows if r[0]})
+        dth_map: dict[str, tuple[str, float]] = {}
+        if type_ids:
+            placeholders = ",".join("?" * len(type_ids))
+            dth_rows = db.plant.execute(
+                f"SELECT plant_type_id, name, AVG(days_to_harvest) "
+                f"FROM plant_varieties "
+                f"WHERE plant_type_id IN ({placeholders}) "
+                f"GROUP BY plant_type_id, name",
+                type_ids,
+            ).fetchall()
+            dth_map = {r[0]: (r[1], r[2]) for r in dth_rows if r[2]}
+
+        for type_id, planted_date, plot_name in active_rows:
+            if type_id in dth_map:
+                plant_name, dth = dth_map[type_id]
+                due = planted_date + timedelta(days=int(dth))
+                overdue_days = (today - due).days
+                if overdue_days > 0:
+                    issues.append(
+                        f"🍅 **{plant_name}** in {plot_name}: "
+                        f"overdue for harvest by {overdue_days}d "
+                        f"(planted {planted_date}, avg {int(dth)}d to harvest)"
+                    )
+    except Exception as exc:
+        issues.append(f"⚠️ Error checking harvest overdue: {exc}")
+
+    # Planned plants whose sow date has passed
+    try:
+        sow_rows = db.garden.execute("""
+            SELECT pi.plant_type_id, pi.planned_sow_date, pl.name
+            FROM plant_instances pi
+            JOIN plots pl ON pl.plot_id = pi.plot_id
+            WHERE pi.status = 'planned'
+              AND pi.planned_sow_date IS NOT NULL
+              AND pi.planned_sow_date < current_date
+        """).fetchall()
+
+        type_ids_s = list({r[0] for r in sow_rows if r[0]})
+        names_s: dict[str, str] = {}
+        if type_ids_s:
+            placeholders = ",".join("?" * len(type_ids_s))
+            name_rows = db.plant.execute(
+                f"SELECT plant_type_id, name FROM plant_types "
+                f"WHERE plant_type_id IN ({placeholders})",
+                type_ids_s,
+            ).fetchall()
+            names_s = {r[0]: r[1] for r in name_rows}
+
+        for type_id, sow_date, plot_name in sow_rows:
+            plant_name = names_s.get(type_id, type_id or "Unknown")
+            days_late = (today - sow_date).days
+            issues.append(
+                f"📅 **{plant_name}** in {plot_name}: "
+                f"planned sow date was {sow_date} ({days_late}d ago) — still marked planned"
+            )
+    except Exception as exc:
+        issues.append(f"⚠️ Error checking overdue sow dates: {exc}")
+
+    # Active plants with no date at all (neither planted_date nor planned_sow_date)
+    try:
+        no_date_rows = db.garden.execute("""
+            SELECT pi.plant_type_id, pl.name
+            FROM plant_instances pi
+            JOIN plots pl ON pl.plot_id = pi.plot_id
+            WHERE pi.status = 'active'
+              AND pi.planted_date IS NULL
+              AND pi.planned_sow_date IS NULL
+        """).fetchall()
+
+        type_ids_n = list({r[0] for r in no_date_rows if r[0]})
+        names_n: dict[str, str] = {}
+        if type_ids_n:
+            placeholders = ",".join("?" * len(type_ids_n))
+            name_rows = db.plant.execute(
+                f"SELECT plant_type_id, name FROM plant_types "
+                f"WHERE plant_type_id IN ({placeholders})",
+                type_ids_n,
+            ).fetchall()
+            names_n = {r[0]: r[1] for r in name_rows}
+
+        for type_id, plot_name in no_date_rows:
+            plant_name = names_n.get(type_id, type_id or "Unknown")
+            issues.append(
+                f"⚠️ **{plant_name}** in {plot_name}: "
+                f"status is 'active' but no planted date recorded"
+            )
+    except Exception as exc:
+        issues.append(f"⚠️ Error checking missing planted dates: {exc}")
+
+    return issues
+
+
+def _render_plant_maintenance(db: DatabaseConnections) -> None:
+    """Snapshot and health check expander for the Plants tab."""
+    with st.expander("🔧 Maintenance", expanded=False):
+        col_s, col_h = st.columns(2)
+
+        with col_s:
+            if st.button("📸 Take Snapshot", use_container_width=True):
+                with st.spinner("Saving snapshot…"):
+                    msg = _take_snapshot(db)
+                st.success(msg)
+
+        with col_h:
+            if st.button("🏥 Health Check", use_container_width=True):
+                with st.spinner("Scanning garden…"):
+                    issues = _run_health_check(db)
+                if not issues:
+                    st.success("All clear — no issues found.")
+                else:
+                    for issue in issues:
+                        st.warning(issue)
+
+        snap_rows = db.garden.execute(
+            """SELECT snapshot_date, triggered_by
+               FROM garden_snapshots
+               ORDER BY snapshot_date DESC
+               LIMIT 5"""
+        ).fetchall()
+        if snap_rows:
+            total = db.garden.execute(
+                "SELECT COUNT(*) FROM garden_snapshots"
+            ).fetchone()[0]
+            st.caption(f"{total} snapshot(s) on record:")
+            for row in snap_rows:
+                st.caption(f"  · {row[0]}  —  {row[1]}")
 
 
 # ── PIL composite builder ─────────────────────────────────────────────────────
@@ -357,6 +675,26 @@ def _render_plant_details(
             st.session_state.selected_plant_id = None
             st.rerun()
 
+    days_to_harvest = (
+        variety.get("days_to_harvest")
+        if variety
+        else _load_days_to_harvest(db, instance["plant_type_id"])
+    )
+    sow_date = instance.get("planted_date") or instance.get("planned_sow_date")
+    if days_to_harvest and sow_date:
+        harvest_ready = sow_date + timedelta(days=int(days_to_harvest))
+        days_remaining = (harvest_ready - date.today()).days
+        if days_remaining > 0:
+            harvest_label = f"{harvest_ready} ({days_remaining}d)"
+        elif days_remaining == 0:
+            harvest_label = f"{harvest_ready} (today!)"
+        else:
+            harvest_label = f"{harvest_ready} ({abs(days_remaining)}d ago)"
+    elif days_to_harvest:
+        harvest_label = f"{days_to_harvest} days from sow"
+    else:
+        harvest_label = "—"
+
     col_a, col_b, col_c, col_d = st.columns(4)
     col_a.metric("Status", instance["status"])
     with col_b:
@@ -371,7 +709,7 @@ def _render_plant_details(
             st.session_state.plants_cv = st.session_state.get("plants_cv", 0) + 1
             st.rerun()
     col_c.metric("Planned sow", str(instance.get("planned_sow_date") or "—"))
-    col_d.metric("Planted", str(instance.get("planted_date") or "—"))
+    col_d.metric("Harvest ready", harvest_label)
 
     # Variety picker
     if varieties:
@@ -420,18 +758,23 @@ def _render_plant_details(
     with act_col:
         st.caption("Actions")
         row_id = instance.get("row_id")
-        if instance["status"] != "fully_harvested":
-            if st.button("🌾 Mark fully harvested", key=f"mark_removed_{instance['instance_id']}", use_container_width=True):
-                _update_instance_status(db, instance["instance_id"], "fully_harvested")
+        if row_id:
+            if st.button("📦 Archive row", key=f"arch_row_{row_id}", use_container_width=True):
+                _archive_row(db, row_id)
+                st.session_state.selected_plant_id = None
                 st.session_state.plants_cv = st.session_state.get("plants_cv", 0) + 1
                 st.rerun()
-        if row_id:
             if st.button("🗑️ Delete row", key=f"del_row_inspect_{row_id}", use_container_width=True, type="secondary"):
                 _delete_row(db, row_id)
                 st.session_state.selected_plant_id = None
                 st.session_state.plants_cv = st.session_state.get("plants_cv", 0) + 1
                 st.rerun()
         else:
+            if st.button("📦 Archive plant", key=f"arch_inst_{instance['instance_id']}", use_container_width=True):
+                _archive_instance(db, instance["instance_id"])
+                st.session_state.selected_plant_id = None
+                st.session_state.plants_cv = st.session_state.get("plants_cv", 0) + 1
+                st.rerun()
             if st.button("🗑️ Delete plant", key=f"del_inst_inspect_{instance['instance_id']}", use_container_width=True, type="secondary"):
                 _delete_instance(db, instance["instance_id"])
                 st.session_state.selected_plant_id = None
@@ -504,6 +847,14 @@ def _render_plant_details(
 
 def render(db: DatabaseConnections) -> None:
     _ensure_migrations(db)
+
+    # Force one rerun on first visit so fabric.js initialises its background
+    # image correctly after being rendered inside a hidden Streamlit tab.
+    # Bump plants_cv so the canvas key is fresh (never seen in the broken hidden-tab render).
+    if "plants_tab_ready" not in st.session_state:
+        st.session_state.plants_tab_ready = True
+        st.session_state.plants_cv = 1
+        st.rerun()
 
     garden = _load_garden(db)
     if not garden:
@@ -714,8 +1065,51 @@ def render(db: DatabaseConnections) -> None:
         else:
             st.session_state.selected_plant_id = None
 
+    # ── Maintenance ───────────────────────────────────────────────────────────
+    _render_plant_maintenance(db)
+
+    # ── Soil Amendment Advisor ────────────────────────────────────────────────
+    _render_amendment_advisor(db, plot["plot_id"], plot["name"])
+
+    # ── Layout Optimizer ──────────────────────────────────────────────────────
+    layout_optimizer.render_section(db, plot["plot_id"], plot["name"])
+
     # ── Plant list ────────────────────────────────────────────────────────────
     _render_plant_list(db, plot["plot_id"], plant_types)
+
+
+# ── Soil Amendment Advisor ────────────────────────────────────────────────────
+
+def _render_amendment_advisor(
+    db: DatabaseConnections,
+    plot_id: str,
+    plot_name: str,
+) -> None:
+    """Render the soil amendment advisor section for the selected plot."""
+    _ensure_amendment_table(db)
+
+    st.divider()
+    with st.expander("🧪 Soil Amendment Advisor", expanded=False):
+        prior = _load_latest_advice(db, plot_id)
+        if prior:
+            st.caption(f"Last generated: {prior['generated_at']}")
+            st.markdown(prior["advice_text"])
+            regen_label = "🔄 Regenerate advice"
+        else:
+            st.caption("No advice generated yet for this plot.")
+            regen_label = "🧪 Get soil amendment advice"
+
+        if st.button(regen_label, key=f"amend_run_{plot_id}"):
+            with st.spinner("Analyzing soil needs and generating recommendations…"):
+                try:
+                    advice = asyncio.run(
+                        amendment_agent.run(plot_id, plot_name, db.garden, db.plant)
+                    )
+                    _save_advice(db, plot_id, advice)
+                    st.success("Amendment advice ready!")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Agent error: {exc}")
 
 
 # ── Plant list ────────────────────────────────────────────────────────────────
@@ -726,14 +1120,54 @@ def _render_plant_list(
     plant_types: list[dict],
 ) -> None:
     instances = _load_instances(db, plot_id)
+    archived_count = _count_archived(db, plot_id)
     if not instances:
         st.caption("No plants placed yet — click the map to add some.")
+        if archived_count:
+            st.caption(f"📦 {archived_count} archived plants in this plot (hidden from view, kept in DB).")
         return
 
     name_map = {pt["plant_type_id"]: pt["name"] for pt in plant_types}
 
     st.divider()
-    st.subheader(f"Plants in plot ({len(instances)})")
+
+    # ── Date range filter ──────────────────────────────────────────────────
+    fc1, fc2, fc3 = st.columns([2, 2, 1])
+    with fc1:
+        date_from = st.date_input(
+            "Planted from", value=None,
+            key=f"list_date_from_{plot_id}", label_visibility="collapsed",
+            help="Filter by planted / planned sow date — from",
+        )
+    with fc2:
+        date_to = st.date_input(
+            "Planted to", value=None,
+            key=f"list_date_to_{plot_id}", label_visibility="collapsed",
+            help="Filter by planted / planned sow date — to",
+        )
+    with fc3:
+        if st.button("✕ Clear", key=f"list_date_clear_{plot_id}", help="Clear date filter"):
+            st.session_state[f"list_date_from_{plot_id}"] = None
+            st.session_state[f"list_date_to_{plot_id}"] = None
+            st.rerun()
+
+    if date_from or date_to:
+        filtered = []
+        for inst in instances:
+            inst_date = inst.get("planted_date") or inst.get("planned_sow_date")
+            if inst_date is None:
+                filtered.append(inst)
+                continue
+            if date_from and inst_date < date_from:
+                continue
+            if date_to and inst_date > date_to:
+                continue
+            filtered.append(inst)
+        instances = filtered
+
+    archive_note = f" · 📦 {archived_count} archived" if archived_count else ""
+    filter_note  = f" · filtered {len(instances)}" if (date_from or date_to) else ""
+    st.subheader(f"Plants in plot ({len(instances)}{filter_note}{archive_note})")
 
     shown_rows: set[str] = set()
     for inst in instances:

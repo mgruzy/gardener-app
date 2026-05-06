@@ -564,15 +564,8 @@ def _fetch_forecast_inline(db: DatabaseConnections, zipcode: str) -> tuple[bool,
 
 
 def _render_weather_bot(db: DatabaseConnections, zipcode: str) -> None:
-    """Fetch-and-summarise button for the 7-day weather window."""
-    st.divider()
-    if st.button("🌤️ Get Forecast", type="primary"):
-        with st.spinner("Fetching weather data..."):
-            ok, msg = _fetch_forecast_inline(db, zipcode)
-        if ok:
-            st.rerun()
-        else:
-            st.error(msg)
+    """Stale-data notice if no forecast has been fetched yet."""
+    pass
 
 
 def _render_charts(db: DatabaseConnections, zipcode: str) -> None:
@@ -684,6 +677,19 @@ def _render_sow_calendar(db: DatabaseConnections, zipcode: str) -> None:
     st.caption(f"{len(df)} plants · Timing relative to today ({today})")
 
 
+def _render_weather_refresh(db: DatabaseConnections, zipcode: str) -> None:
+    """Weather refresh button expander."""
+    with st.expander("🔧 Maintenance", expanded=False):
+        if st.button("🌤️ Refresh Weather", use_container_width=True):
+            with st.spinner("Fetching weather…"):
+                ok, msg = _fetch_forecast_inline(db, zipcode)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def render(db: DatabaseConnections) -> None:
@@ -701,6 +707,9 @@ def render(db: DatabaseConnections) -> None:
         st.info("No frost data — run `build/weather_build/main.py` first.")
         return
 
+    _render_weather_refresh(db, zipcode)
+    st.divider()
+
     st.subheader("📅 Recent & Upcoming")
     _render_weather_bot(db, zipcode)
 
@@ -708,7 +717,7 @@ def render(db: DatabaseConnections) -> None:
     if summary:
         st.info(f"**Briefing:** {summary}")
     else:
-        st.caption("No forecast briefing yet — run `build/weather_forecast/main.py` to generate one.")
+        st.caption("No forecast yet — use 🔧 Maintenance → Refresh Weather below.")
 
     _render_zoomed_charts(db, zipcode)
 
@@ -717,7 +726,7 @@ def render(db: DatabaseConnections) -> None:
             ts = pd.Timestamp(fc_fetched_at).strftime("%b %-d at %-I:%M %p")
         except Exception:
             ts = str(fc_fetched_at)
-        st.caption(f"Forecast last fetched: {ts}  ·  Refresh: run `build/weather_forecast/main.py`")
+        st.caption(f"Forecast last fetched: {ts}  ·  Use 🔧 Maintenance to refresh.")
 
     st.divider()
 
@@ -730,6 +739,6 @@ def render(db: DatabaseConnections) -> None:
     st.divider()
     _render_frost_summary(frost)
     if meta:
-        st.caption(f"Records: {meta['first_record_date']} → {meta['last_updated_date']}  ·  Refresh: run `build/weather_build/main.py`")
+        st.caption(f"Records: {meta['first_record_date']} → {meta['last_updated_date']}")
     st.divider()
     _render_sow_calendar(db, zipcode)

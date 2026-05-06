@@ -89,6 +89,15 @@ def build_garden_db(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS soil_amendment_advice (
+            advice_id       VARCHAR PRIMARY KEY,
+            plot_id         VARCHAR NOT NULL,
+            generated_at    TIMESTAMP NOT NULL,
+            advice_text     VARCHAR NOT NULL
+        )
+    """)
+
 
 def build_weather_db(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""

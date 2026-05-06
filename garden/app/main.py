@@ -43,7 +43,9 @@ if "db" not in st.session_state:
 st.title("🌱 Garden")
 
 # --- Tabs ---
-tab_map, tab_plants, tab_weather = st.tabs(["🗺️ Map", "🌿 Plants", "🌤️ Weather"])
+tab_map, tab_plants, tab_weather, tab_assistant = st.tabs(
+    ["🗺️ Map", "🌿 Plants", "🌤️ Weather", "🤖 Assistant"]
+)
 
 with tab_map:
     from app.pages.map_page import render
@@ -55,4 +57,8 @@ with tab_plants:
 
 with tab_weather:
     from app.pages.weather_page import render
+    render(st.session_state.db)
+
+with tab_assistant:
+    from app.pages.general_garden_assistant import render
     render(st.session_state.db)
